@@ -227,7 +227,7 @@ function finManche(salonCode) {
 
   io.to(salonCode).emit('fin_manche', {
     scores,
-    pointsCette Manche: pointsParJoueur,
+    pointsCetteManche: pointsParJoueur,
     scoresTotal: Object.fromEntries(salon.joueurs.map(j => [j.id, j.score])),
     revelation,
     koboDeclarant: p.koboDeclarant,
