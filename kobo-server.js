@@ -1,31 +1,98 @@
 /**
  * KOBO CARDS — Serveur Multijoueur
- * Node.js + Socket.io
  *
  * Installation :
- *   npm install express socket.io
+ *   npm install express socket.io bad-words
  *
  * Démarrage :
  *   node kobo-server.js
  *
- * Hébergement (Railway / Render / Fly.io) :
- *   - Créer un compte sur https://railway.app (gratuit)
- *   - Nouveau projet → "Deploy from GitHub" ou "Empty Project"
- *   - Uploader ce fichier + package.json
- *   - Variable d'environnement PORT sera définie automatiquement
+ * Le fichier badwords.json doit être présent dans le même dossier.
  */
 
-const express = require('express');
+const express    = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const crypto     = require('crypto');
+const fs         = require('fs');
+const Filter     = require('bad-words');
 
-const app = express();
+const app        = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
+const io         = new Server(httpServer, {
   cors: { origin: '*', methods: ['GET','POST'] }
 });
 
 const PORT = process.env.PORT || 3000;
+
+// ═══════════════════════════════════════════════════════════
+// FILTRAGE DES PSEUDOS
+// ═══════════════════════════════════════════════════════════
+
+// Filtre bad-words (EN) + mots personnalisés depuis badwords.json
+const filter = new Filter();
+try {
+  const customWords = JSON.parse(fs.readFileSync('./badwords.json', 'utf8'));
+  filter.addWords(...customWords);
+  console.log(`[filtre] ${customWords.length} mots chargés depuis badwords.json`);
+} catch (err) {
+  console.error('[filtre] Erreur chargement badwords.json :', err.message);
+}
+
+// Pseudos réservés à l'équipe Kobo Studio
+// Utilisables uniquement avec le suffixe #CodeSecret
+const PSEUDOS_RESERVES = [
+  'kobomaster','koboadmin','kobo_staff','kobostaff','koboteam','kobo_team',
+  'admin','administrateur','administrator','moderateur','modérateur','moderator',
+  'support','kobo_support','kobosupport','staff','equipe_kobo','equipekobo',
+  'kobo_officiel','koboofficiel','officiel','official',
+];
+
+// Hash SHA-256 du code secret équipe
+const TEAM_CODE_HASH = '008b2a988275d3e85f5d965ee1310579fe9a82a34fe72db0b53d4227a8fa0a4c';
+
+function normaliserPseudo(str) {
+  return (str || '').toLowerCase()
+    .replace(/[@àáâä]/g, 'a').replace(/[0òóôö]/g, 'o').replace(/[3èéêë]/g, 'e')
+    .replace(/[1!ìíîï]/g, 'i').replace(/[5]/g, 's').replace(/[7]/g, 't')
+    .replace(/[._\-\s]/g, '').replace(/[*#]/g, '');
+}
+
+function sha256(str) {
+  return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+// Valide un pseudo (avec éventuel code équipe sous la forme Pseudo#Code)
+// Retourne { ok, pseudoFinal, erreur }
+function validerPseudoServeur(saisie) {
+  saisie = (saisie || '').trim();
+  const parties    = saisie.split('#');
+  const pseudoBrut = parties[0].trim();
+  const codeSecret = parties.length > 1 ? parties.slice(1).join('#').trim() : null;
+
+  if (pseudoBrut.length < 3)  return { ok: false, erreur: 'Pseudo trop court (3 caractères min).' };
+  if (pseudoBrut.length > 16) return { ok: false, erreur: 'Pseudo trop long (16 caractères max).' };
+  if (!/^[a-zA-Z0-9_\-àâéèêëîïôùûüç]+$/.test(pseudoBrut))
+    return { ok: false, erreur: 'Caractères non autorisés.' };
+
+  // Vérifier les mots interdits (bad-words + badwords.json)
+  try {
+    if (filter.isProfane(pseudoBrut.toLowerCase()))
+      return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
+  } catch (e) { /* filtre non chargé, on continue */ }
+
+  // Vérifier les pseudos réservés
+  const pseudoNorm = normaliserPseudo(pseudoBrut);
+  const estReserve = PSEUDOS_RESERVES.some(r => normaliserPseudo(r) === pseudoNorm);
+  if (estReserve) {
+    if (!codeSecret)
+      return { ok: false, erreur: 'Ce pseudo est réservé à l\'équipe Kobo Studio.' };
+    if (sha256(codeSecret) !== TEAM_CODE_HASH)
+      return { ok: false, erreur: 'Code d\'équipe incorrect.' };
+  }
+
+  return { ok: true, pseudoFinal: pseudoBrut };
+}
 
 // ═══════════════════════════════════════════════════════════
 // ÉTAT SERVEUR
@@ -303,16 +370,20 @@ io.on('connection', (socket) => {
 
   // ── INSCRIPTION ──────────────────────────────────────────
   socket.on('s_inscrire', ({ pseudo, codeAmi }) => {
-    joueurs[socket.id] = { id: socket.id, pseudo, codeAmi };
+    const res = validerPseudoServeur(pseudo);
+    if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
+    joueurs[socket.id] = { id: socket.id, pseudo: res.pseudoFinal, codeAmi };
     socket.emit('inscrit', { id: socket.id });
-    console.log(`[inscrit] ${pseudo} (${codeAmi})`);
+    console.log(`[inscrit] ${res.pseudoFinal} (${codeAmi})`);
   });
 
   // ── CRÉER UN SALON ────────────────────────────────────────
   socket.on('s_creer_salon', ({ pseudo, maxJoueurs = 4 }) => {
+    const res = validerPseudoServeur(pseudo);
+    if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const code = genererCode(6);
-    const joueur = joueurs[socket.id] || { id: socket.id, pseudo };
-    joueur.pseudo = pseudo;
+    const joueur = joueurs[socket.id] || { id: socket.id, pseudo: res.pseudoFinal };
+    joueur.pseudo = res.pseudoFinal;
     joueurs[socket.id] = joueur;
 
     salons[code] = {
@@ -339,13 +410,15 @@ io.on('connection', (socket) => {
 
   // ── REJOINDRE UN SALON ────────────────────────────────────
   socket.on('s_rejoindre_salon', ({ code, pseudo }) => {
+    const res = validerPseudoServeur(pseudo);
+    if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const salon = salons[code];
     if (!salon) { socket.emit('erreur', { msg: 'Salon introuvable.' }); return; }
     if (salon.etat !== 'attente') { socket.emit('erreur', { msg: 'Partie déjà en cours.' }); return; }
     if (salon.joueurs.length >= salon.maxJoueurs) { socket.emit('erreur', { msg: 'Salon complet.' }); return; }
 
-    const joueur = joueurs[socket.id] || { id: socket.id, pseudo };
-    joueur.pseudo = pseudo;
+    const joueur = joueurs[socket.id] || { id: socket.id, pseudo: res.pseudoFinal };
+    joueur.pseudo = res.pseudoFinal;
     joueur.salonCode = code;
     joueurs[socket.id] = joueur;
 
