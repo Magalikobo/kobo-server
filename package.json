@@ -1,7 +1,6 @@
 {
   "name": "kobo-cards-server",
   "version": "1.0.0",
-  "type": "module",
   "description": "Serveur multijoueur pour Kobo Cards",
   "main": "kobo-server.js",
   "scripts": {

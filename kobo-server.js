@@ -10,13 +10,11 @@
  * Le fichier badwords.json doit être présent dans le même dossier.
  */
 
-import express from 'express';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
-import crypto from 'crypto';
-import fs from 'fs';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+const express = require('express');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
+const crypto = require('crypto');
+const fs = require('fs');
 const Filter = require('bad-words');
 
 const app        = express();
