@@ -4,7 +4,7 @@
   "description": "Serveur multijoueur pour Kobo Cards",
   "main": "kobo-server.js",
   "scripts": {
-    "start": "node kobo-server.js"
+    "start": "node kobo-server.cjs"
   },
   "dependencies": {
     "bad-words": "^4.0.0",
