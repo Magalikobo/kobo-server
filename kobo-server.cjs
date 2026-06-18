@@ -781,9 +781,11 @@ app.get('/salons', (req, res) => {
 // DÉMARRAGE
 // ═══════════════════════════════════════════════════════════
 
-httpServer.listen(PORT, () => {
+const port = process.env.PORT || 3000;
+
+httpServer.listen(port, () => {
   console.log(`\n🃏 Kobo Cards — Serveur multijoueur`);
-  console.log(`   Port : ${PORT}`);
+  console.log(`   Port : ${port}`);
   console.log(`   Prêt !\n`);
 });
 }
