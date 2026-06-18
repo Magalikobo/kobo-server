@@ -10,12 +10,12 @@
  * Le fichier badwords.json doit être présent dans le même dossier.
  */
 
-const express    = require('express');
-const { createServer } = require('http');
-const { Server } = require('socket.io');
-const crypto     = require('crypto');
-const fs         = require('fs');
-const Filter     = require('bad-words');
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import crypto from 'crypto';
+import fs from 'fs';
+import Filter from 'bad-words';
 
 const app        = express();
 const httpServer = createServer(app);
