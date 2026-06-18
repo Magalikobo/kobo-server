@@ -23,7 +23,7 @@ async function demarrerServeur() {
 // ═══════════════════════════════════════════════════════════
 
 // Filtre bad-words (EN) + mots personnalisés depuis badwords.json
-const profanityFilter = new Filter(); 
+
 try {
   const customWords = JSON.parse(fs.readFileSync('./badwords.json', 'utf8'));
   profanityFilter.addWords(...customWords);
