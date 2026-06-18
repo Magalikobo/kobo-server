@@ -7,7 +7,6 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const fs = require('fs');
-const profanityFilter = require('leo-profanity');
 
 async function demarrerServeur() {
     
@@ -19,16 +18,6 @@ async function demarrerServeur() {
 
 // FILTRAGE DES PSEUDOS
 // ═══════════════════════════════════════════════════════════
-
-// Filtre bad-words (EN) + mots personnalisés depuis badwords.json
-
-try {
-  const customWords = JSON.parse(fs.readFileSync('./badwords.json', 'utf8'));
-  profanityFilter.addWords(...customWords);
-  console.log(`[filtre] ${customWords.length} mots chargés depuis badwords.json`);
-} catch (err) {
-  console.error('[filtre] Erreur chargement badwords.json :', err.message);
-}
 
 // Pseudos réservés à l'équipe Kobo Studio
 const PSEUDOS_RESERVES = [
@@ -51,7 +40,8 @@ function sha256(str) {
   return crypto.createHash('sha256').update(str).digest('hex');
 }
 
-function validerPseudoServeur(saisie) {
+// Fonction marquée async pour permettre l'utilisation de await
+async function validerPseudoServeur(saisie) {
   saisie = (saisie || '').trim();
   const parties    = saisie.split('#');
   const pseudoBrut = parties[0].trim();
@@ -62,10 +52,18 @@ function validerPseudoServeur(saisie) {
   if (!/^[a-zA-Z0-9_\-àâéèêëîïôùûüç]+$/.test(pseudoBrut))
     return { ok: false, erreur: 'Caractères non autorisés.' };
 
-  // Vérifier les mots interdits avec profanityFilter
-if (profanityFilter.check(pseudoBrut.toLowerCase())) {
-      return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
-  } 
+  // Vérification via l'API externe (sans aucune bibliothèque à installer)
+  try {
+    const response = await fetch(`https://www.purgomalum.com/service/json?text=${encodeURIComponent(pseudoBrut)}`);
+    const data = await response.json();
+
+    if (data.result !== pseudoBrut) {
+        return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
+    }
+  } catch (err) {
+    console.error("Erreur filtre :", err);
+    // On continue par sécurité si l'API est injoignable
+  }
 
   const pseudoNorm = normaliserPseudo(pseudoBrut);
   const estReserve = PSEUDOS_RESERVES.some(r => normaliserPseudo(r) === pseudoNorm);
@@ -78,7 +76,6 @@ if (profanityFilter.check(pseudoBrut.toLowerCase())) {
 
   return { ok: true, pseudoFinal: pseudoBrut };
 }
-
 // ═══════════════════════════════════════════════════════════
 // ÉTAT SERVEUR
 // ═══════════════════════════════════════════════════════════
