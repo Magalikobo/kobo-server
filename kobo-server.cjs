@@ -12,28 +12,35 @@ async function demarrerServeur() {
     // 1. Chargement de bad-words
     const badWordsModule = await import('bad-words');
     const Filter = badWordsModule.default || badWordsModule;
+    
+    // 2. Initialisation de l'outil de filtrage ICI, dans la fonction
+    const filter = new Filter();
 
-    // 2. Initialisation du serveur DANS la fonction
+    // 3. Initialisation du serveur
     const app = express();
     const httpServer = createServer(app);
     const io = new Server(httpServer, {
         cors: { origin: '*', methods: ['GET', 'POST'] }
     });
 
-    // 3. Tes événements Socket.io
+    // 4. Utilisation de 'filter' dans tes connexions Socket
     io.on('connection', (socket) => {
         console.log("Quelqu'un est connecté !");
-        // ... ajoute ici le reste de tes fonctionnalités ...
+        
+        socket.on('message', (data) => {
+            // Exemple : tu peux utiliser filter ici
+            const cleanMessage = filter.clean(data);
+            console.log("Message filtré :", cleanMessage);
+        });
     });
 
-    // 4. Lancement
+    // 5. Lancement
     const PORT = process.env.PORT || 3000;
     httpServer.listen(PORT, () => {
         console.log(`Serveur prêt sur le port ${PORT}`);
     });
 }
 
-// Lancement de la fonction principale
 demarrerServeur().catch(err => console.error("Erreur critique :", err));
 
 // FILTRAGE DES PSEUDOS
