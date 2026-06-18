@@ -15,7 +15,9 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import crypto from 'crypto';
 import fs from 'fs';
-import Filter from 'bad-words';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const Filter = require('bad-words');
 
 const app        = express();
 const httpServer = createServer(app);
