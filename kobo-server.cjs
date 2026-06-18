@@ -9,40 +9,15 @@ const crypto = require('crypto');
 const fs = require('fs');
 
 async function demarrerServeur() {
-    // 1. Chargement de bad-words
     const badWordsModule = await import('bad-words');
     const Filter = badWordsModule.default || badWordsModule;
-    
-    // 2. Initialisation de filter ICI, DANS la fonction
     const filter = new Filter();
 
-    // 3. Initialisation du serveur
     const app = express();
     const httpServer = createServer(app);
     const io = new Server(httpServer, {
         cors: { origin: '*', methods: ['GET', 'POST'] }
     });
-
-    // 4. Utilisation de filter et io ICI, DANS la fonction
-    io.on('connection', (socket) => {
-        console.log("Quelqu'un est connecté !");
-        
-        // Exemple d'utilisation de filter
-        socket.on('message', (data) => {
-            const cleanMessage = filter.clean(data);
-            console.log("Message filtré :", cleanMessage);
-        });
-    });
-
-    // 5. Lancement
-    const PORT = process.env.PORT || 3000;
-    httpServer.listen(PORT, () => {
-        console.log(`Serveur prêt sur le port ${PORT}`);
-    });
-}
-
-// Lancement de la fonction principale
-demarrerServeur().catch(err => console.error("Erreur critique :", err));
 
 // FILTRAGE DES PSEUDOS
 // ═══════════════════════════════════════════════════════════
@@ -822,3 +797,5 @@ httpServer.listen(PORT, () => {
   console.log(`   Port : ${PORT}`);
   console.log(`   Prêt !\n`);
 });
+}
+demarrerServeur().catch(err => console.error("Erreur critique :", err));
