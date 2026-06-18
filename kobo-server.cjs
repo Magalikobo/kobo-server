@@ -11,7 +11,7 @@ const fs = require('fs');
 async function demarrerServeur() {
     const badWordsModule = await import('bad-words');
     const Filter = badWordsModule.default || badWordsModule;
-    const filter = new Filter();
+    const profanityFilter = new Filter();
 
     const app = express();
     const httpServer = createServer(app);
@@ -23,17 +23,16 @@ async function demarrerServeur() {
 // ═══════════════════════════════════════════════════════════
 
 // Filtre bad-words (EN) + mots personnalisés depuis badwords.json
-const filter = new Filter();
+const profanityFilter = new Filter(); 
 try {
   const customWords = JSON.parse(fs.readFileSync('./badwords.json', 'utf8'));
-  filter.addWords(...customWords);
+  profanityFilter.addWords(...customWords);
   console.log(`[filtre] ${customWords.length} mots chargés depuis badwords.json`);
 } catch (err) {
   console.error('[filtre] Erreur chargement badwords.json :', err.message);
 }
 
 // Pseudos réservés à l'équipe Kobo Studio
-// Utilisables uniquement avec le suffixe #CodeSecret
 const PSEUDOS_RESERVES = [
   'kobomaster','koboadmin','kobo_staff','kobostaff','koboteam','kobo_team',
   'admin','administrateur','administrator','moderateur','modérateur','moderator',
@@ -41,7 +40,6 @@ const PSEUDOS_RESERVES = [
   'kobo_officiel','koboofficiel','officiel','official',
 ];
 
-// Hash SHA-256 du code secret équipe
 const TEAM_CODE_HASH = '008b2a988275d3e85f5d965ee1310579fe9a82a34fe72db0b53d4227a8fa0a4c';
 
 function normaliserPseudo(str) {
@@ -55,8 +53,6 @@ function sha256(str) {
   return crypto.createHash('sha256').update(str).digest('hex');
 }
 
-// Valide un pseudo (avec éventuel code équipe sous la forme Pseudo#Code)
-// Retourne { ok, pseudoFinal, erreur }
 function validerPseudoServeur(saisie) {
   saisie = (saisie || '').trim();
   const parties    = saisie.split('#');
@@ -68,13 +64,12 @@ function validerPseudoServeur(saisie) {
   if (!/^[a-zA-Z0-9_\-àâéèêëîïôùûüç]+$/.test(pseudoBrut))
     return { ok: false, erreur: 'Caractères non autorisés.' };
 
-  // Vérifier les mots interdits (bad-words + badwords.json)
+  // Vérifier les mots interdits avec profanityFilter
   try {
-    if (filter.isProfane(pseudoBrut.toLowerCase()))
+    if (profanityFilter.isProfane(pseudoBrut.toLowerCase()))
       return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
   } catch (e) { /* filtre non chargé, on continue */ }
 
-  // Vérifier les pseudos réservés
   const pseudoNorm = normaliserPseudo(pseudoBrut);
   const estReserve = PSEUDOS_RESERVES.some(r => normaliserPseudo(r) === pseudoNorm);
   if (estReserve) {
