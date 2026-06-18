@@ -1,13 +1,5 @@
 /**
  * KOBO CARDS — Serveur Multijoueur
- *
- * Installation :
- *   npm install express socket.io bad-words
- *
- * Démarrage :
- *   node kobo-server.js
- *
- * Le fichier badwords.json doit être présent dans le même dossier.
  */
 
 const express = require('express');
@@ -15,17 +7,35 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const fs = require('fs');
-const Filter = require('bad-words');
 
-const app        = express();
-const httpServer = createServer(app);
-const io         = new Server(httpServer, {
-  cors: { origin: '*', methods: ['GET','POST'] }
-});
+async function demarrerServeur() {
+    // 1. Chargement de bad-words
+    const badWordsModule = await import('bad-words');
+    const Filter = badWordsModule.default || badWordsModule;
 
-const PORT = process.env.PORT || 3000;
+    // 2. Initialisation du serveur DANS la fonction
+    const app = express();
+    const httpServer = createServer(app);
+    const io = new Server(httpServer, {
+        cors: { origin: '*', methods: ['GET', 'POST'] }
+    });
 
-// ═══════════════════════════════════════════════════════════
+    // 3. Tes événements Socket.io
+    io.on('connection', (socket) => {
+        console.log("Quelqu'un est connecté !");
+        // ... ajoute ici le reste de tes fonctionnalités ...
+    });
+
+    // 4. Lancement
+    const PORT = process.env.PORT || 3000;
+    httpServer.listen(PORT, () => {
+        console.log(`Serveur prêt sur le port ${PORT}`);
+    });
+}
+
+// Lancement de la fonction principale
+demarrerServeur().catch(err => console.error("Erreur critique :", err));
+
 // FILTRAGE DES PSEUDOS
 // ═══════════════════════════════════════════════════════════
 
