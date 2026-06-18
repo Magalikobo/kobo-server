@@ -7,11 +7,10 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const fs = require('fs');
-const { Filter } = require('bad-words');
+const profanityFilter = require('leo-profanity');
 
 async function demarrerServeur() {
-    const profanityFilter = new Filter();
-
+    
     const app = express();
     const httpServer = createServer(app);
     const io = new Server(httpServer, {
@@ -64,10 +63,9 @@ function validerPseudoServeur(saisie) {
     return { ok: false, erreur: 'Caractères non autorisés.' };
 
   // Vérifier les mots interdits avec profanityFilter
-  try {
-    if (profanityFilter.isProfane(pseudoBrut.toLowerCase()))
+if (profanityFilter.check(pseudoBrut.toLowerCase())) {
       return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
-  } catch (e) { /* filtre non chargé, on continue */ }
+  } 
 
   const pseudoNorm = normaliserPseudo(pseudoBrut);
   const estReserve = PSEUDOS_RESERVES.some(r => normaliserPseudo(r) === pseudoNorm);
