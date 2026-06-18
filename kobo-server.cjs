@@ -7,10 +7,9 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const fs = require('fs');
+const { Filter } = require('bad-words');
 
 async function demarrerServeur() {
-    const badWordsModule = await import('bad-words');
-    const Filter = badWordsModule.default || badWordsModule;
     const profanityFilter = new Filter();
 
     const app = express();
