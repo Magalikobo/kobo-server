@@ -86,6 +86,9 @@ const salons = {};
 // joueurs[socketId] = { id, pseudo, codeAmi, salonCode }
 const joueurs = {};
 
+// Index codeAmi → socketId (pour invitations et présence)
+const codeAmiIndex = {};
+
 // ═══════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════
@@ -351,17 +354,19 @@ io.on('connection', (socket) => {
   console.log(`[+] Connexion : ${socket.id}`);
 
   // ── INSCRIPTION ──────────────────────────────────────────
-  socket.on('s_inscrire', ({ pseudo, codeAmi }) => {
-    const res = validerPseudoServeur(pseudo);
+  socket.on('s_inscrire', async ({ pseudo, codeAmi }) => {
+    const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     joueurs[socket.id] = { id: socket.id, pseudo: res.pseudoFinal, codeAmi };
+    // Indexer par codeAmi pour les invitations
+    if (codeAmi) codeAmiIndex[codeAmi] = socket.id;
     socket.emit('inscrit', { id: socket.id });
     console.log(`[inscrit] ${res.pseudoFinal} (${codeAmi})`);
   });
 
   // ── CRÉER UN SALON ────────────────────────────────────────
-  socket.on('s_creer_salon', ({ pseudo, maxJoueurs = 4 }) => {
-    const res = validerPseudoServeur(pseudo);
+  socket.on('s_creer_salon', async ({ pseudo, maxJoueurs = 4 }) => {
+    const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const code = genererCode(6);
     const joueur = joueurs[socket.id] || { id: socket.id, pseudo: res.pseudoFinal };
@@ -391,8 +396,8 @@ io.on('connection', (socket) => {
   });
 
   // ── REJOINDRE UN SALON ────────────────────────────────────
-  socket.on('s_rejoindre_salon', ({ code, pseudo }) => {
-    const res = validerPseudoServeur(pseudo);
+  socket.on('s_rejoindre_salon', async ({ code, pseudo }) => {
+    const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const salon = salons[code];
     if (!salon) { socket.emit('erreur', { msg: 'Salon introuvable.' }); return; }
@@ -707,11 +712,36 @@ io.on('connection', (socket) => {
   });
 
   // ── QUITTER ───────────────────────────────────────────────
+  // ── INVITATION PAR CODE AMI ─────────────────────────────
+  socket.on('s_inviter', ({ codeAmiCible, salonCode }) => {
+    const expediteur = joueurs[socket.id];
+    if (!expediteur) return;
+    // Trouver le socket de la cible par son code ami
+    const cibleSocketId = codeAmiIndex[codeAmiCible];
+    if (!cibleSocketId) {
+      socket.emit('erreur', { msg: 'Ami introuvable ou hors ligne.' }); return;
+    }
+    const socketCible = io.sockets.sockets.get(cibleSocketId);
+    if (!socketCible) {
+      socket.emit('erreur', { msg: 'Ami déconnecté.' }); return;
+    }
+    socketCible.emit('invitation_recue', {
+      de: expediteur.pseudo,
+      codeAmi: expediteur.codeAmi,
+      salonCode,
+    });
+    socket.emit('invitation_envoyee', { codeAmiCible });
+    console.log(`[invitation] ${expediteur.pseudo} → ${codeAmiCible} (salon ${salonCode})`);
+  });
+
   socket.on('s_quitter_salon', () => {
     quitterSalon(socket);
   });
 
   socket.on('disconnect', () => {
+    // Nettoyer l'index codeAmi
+    const j = joueurs[socket.id];
+    if (j && j.codeAmi) delete codeAmiIndex[j.codeAmi];
     quitterSalon(socket);
     delete joueurs[socket.id];
     console.log(`[-] Déconnexion : ${socket.id}`);
