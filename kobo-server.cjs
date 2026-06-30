@@ -354,14 +354,26 @@ io.on('connection', (socket) => {
   console.log(`[+] Connexion : ${socket.id}`);
 
   // ── INSCRIPTION ──────────────────────────────────────────
-  socket.on('s_inscrire', async ({ pseudo, codeAmi }) => {
+  socket.on('s_inscrire', async ({ pseudo, codeAmi, avatar }) => {
     const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
-    joueurs[socket.id] = { id: socket.id, pseudo: res.pseudoFinal, codeAmi };
-    // Indexer par codeAmi pour les invitations
-    if (codeAmi) codeAmiIndex[codeAmi] = socket.id;
+    joueurs[socket.id] = { id: socket.id, pseudo: res.pseudoFinal, codeAmi, avatar: avatar||'chien' };
+    if (codeAmi) codeAmiIndex[codeAmi] = { socketId: socket.id, pseudo: res.pseudoFinal, avatar: avatar||'chien' };
     socket.emit('inscrit', { id: socket.id });
     console.log(`[inscrit] ${res.pseudoFinal} (${codeAmi})`);
+  });
+
+  // Recherche d'un joueur par son code ami
+  socket.on('s_chercher_ami', ({ codeAmi }) => {
+    const info = codeAmiIndex[codeAmi];
+    if (!info) {
+      socket.emit('ami_introuvable', { codeAmi }); return;
+    }
+    socket.emit('ami_trouve', {
+      codeAmi,
+      pseudo: info.pseudo,
+      avatar: info.avatar,
+    });
   });
 
   // ── CRÉER UN SALON ────────────────────────────────────────
@@ -717,7 +729,8 @@ io.on('connection', (socket) => {
     const expediteur = joueurs[socket.id];
     if (!expediteur) return;
     // Trouver le socket de la cible par son code ami
-    const cibleSocketId = codeAmiIndex[codeAmiCible];
+    const cibleInfo = codeAmiIndex[codeAmiCible];
+    const cibleSocketId = cibleInfo ? cibleInfo.socketId : null;
     if (!cibleSocketId) {
       socket.emit('erreur', { msg: 'Ami introuvable ou hors ligne.' }); return;
     }
@@ -741,7 +754,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     // Nettoyer l'index codeAmi
     const j = joueurs[socket.id];
-    if (j && j.codeAmi) delete codeAmiIndex[j.codeAmi];
+    if (j && j.codeAmi && codeAmiIndex[j.codeAmi]) delete codeAmiIndex[j.codeAmi];
     quitterSalon(socket);
     delete joueurs[socket.id];
     console.log(`[-] Déconnexion : ${socket.id}`);
