@@ -138,7 +138,12 @@ function getSalonPublic(code) {
     nbJoueurs: s.joueurs.length,
     maxJoueurs: s.maxJoueurs,
     etat: s.etat,
-    joueurs: s.joueurs.map(j => ({ pseudo: j.pseudo, pret: j.pret }))
+    joueurs: s.joueurs.map(j => ({
+      id: j.id,
+      pseudo: j.pseudo,
+      avatar: j.avatar || (joueurs[j.id] && joueurs[j.id].avatar) || 'chien',
+      pret: j.pret
+    }))
   };
 }
 
@@ -186,6 +191,7 @@ function demarrerPartie(salonCode) {
       joueurs: salon.joueurs.map(jj => ({
         id: jj.id,
         pseudo: jj.pseudo,
+        avatar: jj.avatar || (joueurs[jj.id] && joueurs[jj.id].avatar) || 'chien',
         score: jj.score,
         nbSlots: jj.slots.filter(c => c !== null).length,
         vous: jj.id === j.id,
@@ -357,8 +363,23 @@ io.on('connection', (socket) => {
   socket.on('s_inscrire', async ({ pseudo, codeAmi, avatar }) => {
     const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
-    joueurs[socket.id] = { id: socket.id, pseudo: res.pseudoFinal, codeAmi, avatar: avatar||'chien' };
-    if (codeAmi) codeAmiIndex[codeAmi] = { socketId: socket.id, pseudo: res.pseudoFinal, avatar: avatar||'chien' };
+    const av = avatar || 'chien';
+    joueurs[socket.id] = { id: socket.id, pseudo: res.pseudoFinal, codeAmi, avatar: av };
+    if (codeAmi) codeAmiIndex[codeAmi] = { socketId: socket.id, pseudo: res.pseudoFinal, avatar: av };
+
+    // Récupération après reconnexion : mettre à jour l'id dans salon.joueurs
+    // (le socketId change après chaque reconnexion Railway)
+    if (codeAmi) {
+      for (const [code, salon] of Object.entries(salons)) {
+        const jInSalon = salon.joueurs.find(jj => jj.codeAmi === codeAmi);
+        if (jInSalon) {
+          console.log(`[reconnexion] ${res.pseudoFinal} : ${jInSalon.id} → ${socket.id}`);
+          jInSalon.id = socket.id; // mettre à jour le socketId
+          joueurs[socket.id].salonCode = code;
+          socket.join(code); // rejoindre la room Socket.io
+        }
+      }
+    }
     socket.emit('inscrit', { id: socket.id });
     console.log(`[inscrit] ${res.pseudoFinal} (${codeAmi})`);
   });
@@ -385,6 +406,7 @@ io.on('connection', (socket) => {
     joueur.pseudo = res.pseudoFinal;
     joueurs[socket.id] = joueur;
 
+    const avatarHote = joueur.avatar || 'chien';
     salons[code] = {
       code,
       hote: socket.id,
@@ -392,7 +414,9 @@ io.on('connection', (socket) => {
       etat: 'attente',
       joueurs: [{
         id: socket.id,
-        pseudo,
+        codeAmi: joueur.codeAmi || '',
+        pseudo: res.pseudoFinal,
+        avatar: avatarHote,
         pret: false,
         score: 0,
         slots: [],
@@ -421,7 +445,9 @@ io.on('connection', (socket) => {
     joueur.salonCode = code;
     joueurs[socket.id] = joueur;
 
-    salon.joueurs.push({ id: socket.id, pseudo, pret: false, score: 0, slots: [], slotsVus: new Set() });
+    const avatarInvite = (joueurs[socket.id] && joueurs[socket.id].avatar) || 'chien';
+    const codeAmiInvite = (joueurs[socket.id] && joueurs[socket.id].codeAmi) || '';
+    salon.joueurs.push({ id: socket.id, codeAmi: codeAmiInvite, pseudo: res.pseudoFinal, avatar: avatarInvite, pret: false, score: 0, slots: [], slotsVus: new Set() });
     socket.join(code);
 
     socket.emit('salon_rejoint', { code, salon: getSalonPublic(code) });
@@ -453,7 +479,11 @@ io.on('connection', (socket) => {
     const j = joueurs[socket.id];
     if (!j || !j.salonCode) return;
     const salon = salons[j.salonCode];
-    if (!salon || salon.hote !== socket.id) return;
+    if (!salon) return;
+    // Seul l'hôte peut lancer, mais on envoie un message clair si c'est l'invité
+    if (salon.hote !== socket.id) {
+      socket.emit('erreur', { msg: "Seul l'hôte peut lancer la partie." }); return;
+    }
     if (salon.joueurs.length < 2) { socket.emit('erreur', { msg: 'Il faut au moins 2 joueurs.' }); return; }
     demarrerPartie(j.salonCode);
   });
@@ -719,7 +749,11 @@ io.on('connection', (socket) => {
     const j = joueurs[socket.id];
     if (!j || !j.salonCode) return;
     const salon = salons[j.salonCode];
-    if (!salon || salon.hote !== socket.id) return;
+    if (!salon) return;
+    // Seul l'hôte peut lancer, mais on envoie un message clair si c'est l'invité
+    if (salon.hote !== socket.id) {
+      socket.emit('erreur', { msg: "Seul l'hôte peut lancer la partie." }); return;
+    }
     nouvelleManche(j.salonCode);
   });
 
@@ -730,13 +764,15 @@ io.on('connection', (socket) => {
     if (!expediteur) return;
     // Trouver le socket de la cible par son code ami
     const cibleInfo = codeAmiIndex[codeAmiCible];
+    console.log(`[invitation] codeAmiCible=${codeAmiCible}, cibleInfo=`, cibleInfo);
+    console.log(`[invitation] codeAmiIndex keys=`, Object.keys(codeAmiIndex));
     const cibleSocketId = cibleInfo ? cibleInfo.socketId : null;
     if (!cibleSocketId) {
-      socket.emit('erreur', { msg: 'Ami introuvable ou hors ligne.' }); return;
+      socket.emit('erreur', { msg: 'Ami introuvable ou hors ligne. Demandez-lui de rouvrir la page multi.' }); return;
     }
     const socketCible = io.sockets.sockets.get(cibleSocketId);
     if (!socketCible) {
-      socket.emit('erreur', { msg: 'Ami déconnecté.' }); return;
+      socket.emit('erreur', { msg: 'Ami déconnecté. Demandez-lui de rouvrir la page multi.' }); return;
     }
     socketCible.emit('invitation_recue', {
       de: expediteur.pseudo,
@@ -749,6 +785,11 @@ io.on('connection', (socket) => {
 
   socket.on('s_quitter_salon', () => {
     quitterSalon(socket);
+  });
+
+  socket.on('ping_keepalive', () => {
+    // Répondre au ping client pour maintenir la connexion active
+    socket.emit('pong_keepalive');
   });
 
   socket.on('disconnect', () => {
