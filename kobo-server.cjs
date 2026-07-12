@@ -540,13 +540,16 @@ io.on('connection', (socket) => {
     }
 
     const carte = p.defausse.pop();
+    const defausseRestante = p.defausse[p.defausse.length - 1] || null;
+    // Envoyer au joueur qui pioche
     socket.emit('carte_defausse_piochee', {
       carte,
-      nouvelleDefausse: p.defausse[p.defausse.length - 1] || null,
+      defausseRestante,
     });
-    io.to(j.salonCode).emit('defausse_changee', {
-      top: p.defausse[p.defausse.length - 1] || null,
+    // Informer les autres joueurs que la défausse a changé
+    socket.to(j.salonCode).emit('adversaire_pioche_defausse', {
       joueurId: socket.id,
+      defausseRestante,
     });
   });
 
@@ -599,10 +602,11 @@ io.on('connection', (socket) => {
     if (salon.joueurs[p.tourIdx].id !== socket.id) return;
 
     p.defausse.push(cartePiochee);
+    const nouveauTop = p.defausse[p.defausse.length - 1];
     io.to(j.salonCode).emit('carte_defaussee', {
       joueurId: socket.id,
       carte: cartePiochee,
-      defausseTop: cartePiochee,
+      defausseTop: nouveauTop, // toujours le vrai top de la pile
     });
 
     if (p.dernierTour) {
