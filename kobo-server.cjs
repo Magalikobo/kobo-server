@@ -792,8 +792,65 @@ io.on('connection', (socket) => {
   });
 
   socket.on('ping_keepalive', () => {
-    // Répondre au ping client pour maintenir la connexion active
     socket.emit('pong_keepalive');
+  });
+
+  // ── VALET (échange de cartes) ──────────────────────────────
+  socket.on('s_valet', ({ cartePiochee, slotJoueur, slotAdversaire, adversaireId }) => {
+    const j = joueurs[socket.id];
+    if (!j || !j.salonCode) return;
+    const salon = salons[j.salonCode];
+    if (!salon || !salon.partie) return;
+    const p = salon.partie;
+
+    if (salon.joueurs[p.tourIdx].id !== socket.id) return;
+
+    // Trouver les deux joueurs dans le salon
+    const jSlots = salon.joueurs.find(jj => jj.id === socket.id);
+    const adversaire = salon.joueurs.find(jj => jj.id === adversaireId);
+    if (!jSlots || !adversaire) return;
+
+    // Effectuer l'échange
+    const carteJoueur = jSlots.slots[slotJoueur];
+    const carteAdv = adversaire.slots[slotAdversaire];
+
+    jSlots.slots[slotJoueur] = carteAdv || null;
+    if (adversaire.slots[slotAdversaire] !== undefined) {
+      adversaire.slots[slotAdversaire] = carteJoueur || null;
+    }
+
+    // Défausser la carte piochée
+    p.defausse.push(cartePiochee);
+    const defausseTop = p.defausse[p.defausse.length - 1];
+
+    // Confirmer au joueur qui a joué le Valet
+    socket.emit('valet_ok', {
+      slotJoueur,
+      nouvelleCarteJoueur: carteAdv || null,
+      defausseTop,
+    });
+
+    // Informer l'adversaire que sa carte a changé
+    const socketAdv = io.sockets.sockets.get(adversaireId);
+    if (socketAdv) {
+      socketAdv.emit('valet_subi', {
+        slotJoueur: slotAdversaire,
+        nouvelleCarteJoueur: carteJoueur || null,
+        defausseTop,
+      });
+    }
+
+    // Informer les autres joueurs de la défausse
+    io.to(j.salonCode).emit('carte_defaussee', {
+      joueurId: socket.id,
+      carte: cartePiochee,
+      defausseTop,
+    });
+
+    if (p.dernierTour) {
+      p.dernierTourJoue.add(socket.id);
+    }
+    prochainTour(j.salonCode);
   });
 
   socket.on('disconnect', () => {
