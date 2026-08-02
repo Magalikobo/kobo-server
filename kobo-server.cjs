@@ -202,6 +202,8 @@ function demarrerPartie(salonCode) {
   }
 
   console.log(`[${salonCode}] Partie démarrée — ${salon.joueurs.length} joueurs`);
+  // Log des slots initiaux pour debug
+  salon.joueurs.forEach(j => console.log(`  [slots] ${j.pseudo}:`, j.slots));
 }
 
 function prochainTour(salonCode) {
