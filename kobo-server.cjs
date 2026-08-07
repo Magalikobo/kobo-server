@@ -400,15 +400,17 @@ io.on('connection', (socket) => {
   });
 
   // ── CRÉER UN SALON ────────────────────────────────────────
-  socket.on('s_creer_salon', async ({ pseudo, maxJoueurs = 4 }) => {
+  socket.on('s_creer_salon', async ({ pseudo, maxJoueurs = 4, avatar }) => {
     const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const code = genererCode(6);
     const joueur = joueurs[socket.id] || { id: socket.id, pseudo: res.pseudoFinal };
     joueur.pseudo = res.pseudoFinal;
+    // Mettre à jour l'avatar depuis s_creer_salon si fourni
+    if(avatar) joueur.avatar = avatar;
     joueurs[socket.id] = joueur;
 
-    const avatarHote = joueur.avatar || 'chien';
+    const avatarHote = avatar || joueur.avatar || 'chien';
     salons[code] = {
       code,
       hote: socket.id,
@@ -618,6 +620,28 @@ io.on('connection', (socket) => {
   });
 
   // ── SUPPRIMER UNE PAIRE ───────────────────────────────────
+  // ── AJOUTER CARTE (mauvaise suppr. paire) ─────────────────────────────
+  socket.on('s_ajouter_carte', ({ carte }) => {
+    const j = joueurs[socket.id];
+    if (!j || !j.salonCode) return;
+    const salon = salons[j.salonCode];
+    if (!salon || !salon.partie) return;
+    const jSlots = salon.joueurs.find(jj => jj.id === socket.id);
+    if (!jSlots) return;
+    // Ajouter la carte dans un slot vide ou en 5ème position
+    const slotVide = jSlots.slots.indexOf(null);
+    if(slotVide >= 0){
+      jSlots.slots[slotVide] = carte;
+    } else {
+      jSlots.slots.push(carte);
+    }
+    socket.emit('carte_ajoutee', { slots: jSlots.slots });
+    if (salon.partie.dernierTour) {
+      salon.partie.dernierTourJoue.add(socket.id);
+    }
+    prochainTour(j.salonCode);
+  });
+
   socket.on('s_supprimer_paire', ({ cartePiochee, slotIndex }) => {
     const j = joueurs[socket.id];
     if (!j || !j.salonCode) return;
@@ -795,6 +819,47 @@ io.on('connection', (socket) => {
 
   socket.on('ping_keepalive', () => {
     socket.emit('pong_keepalive');
+  });
+
+  // ── POUVOIR 9 : regarder sa propre carte ──────────────────────────────
+  socket.on('s_regarder_carte_propre', ({ slotIndex }) => {
+    const j = joueurs[socket.id];
+    if (!j || !j.salonCode) return;
+    const salon = salons[j.salonCode];
+    if (!salon || !salon.partie) return;
+    const jSlots = salon.joueurs.find(jj => jj.id === socket.id);
+    if (!jSlots) return;
+    const carte = jSlots.slots[slotIndex];
+    // Envoyer la vraie carte au joueur
+    socket.emit('carte_revelee_propre', { slotIndex, carte });
+    // Informer les adversaires qu'une carte se retourne (sans révéler laquelle)
+    socket.to(j.salonCode).emit('adversaire_regarde_carte', {
+      joueurId: socket.id,
+      slotIndex,
+      appartient: 'joueur', // c'est la carte du joueur qui se retourne
+    });
+  });
+
+  // ── POUVOIR 10 : regarder une carte adverse ───────────────────────────
+  socket.on('s_regarder_carte_adverse', ({ adversaireId, slotIndex }) => {
+    const j = joueurs[socket.id];
+    if (!j || !j.salonCode) return;
+    const salon = salons[j.salonCode];
+    if (!salon || !salon.partie) return;
+    const adversaire = salon.joueurs.find(jj => jj.id === adversaireId);
+    if (!adversaire) return;
+    const carte = adversaire.slots[slotIndex];
+    // Envoyer la vraie carte au joueur qui regarde
+    socket.emit('carte_revelee_adverse', { adversaireId, slotIndex, carte });
+    // Informer l'adversaire que sa carte est regardée (retournement visible)
+    const socketAdv = io.sockets.sockets.get(adversaireId);
+    if (socketAdv) {
+      socketAdv.emit('adversaire_regarde_carte', {
+        joueurId: socket.id,
+        slotIndex,
+        appartient: 'adverse', // c'est la carte de l'adversaire qui se retourne
+      });
+    }
   });
 
   // ── VALET (échange de cartes) ──────────────────────────────
