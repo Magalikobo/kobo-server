@@ -636,10 +636,12 @@ io.on('connection', (socket) => {
       jSlots.slots.push(carte);
     }
     socket.emit('carte_ajoutee', { slots: jSlots.slots });
-    if (salon.partie.dernierTour) {
-      salon.partie.dernierTourJoue.add(socket.id);
-    }
-    prochainTour(j.salonCode);
+    // Ne pas passer le tour — le joueur doit encore jouer (remplacer/défausser)
+    // Informer aussi les adversaires qu'une carte a été ajoutée
+    socket.to(j.salonCode).emit('adversaire_carte_ajoutee', {
+      joueurId: socket.id,
+      nbSlots: jSlots.slots.filter(c => c !== null).length,
+    });
   });
 
   socket.on('s_supprimer_paire', ({ cartePiochee, slotIndex }) => {
@@ -653,6 +655,27 @@ io.on('connection', (socket) => {
 
     const joueurSalon = salon.joueurs.find(jj => jj.id === socket.id);
     const cartePaire = joueurSalon.slots[slotIndex];
+
+    // Validation côté serveur : les deux cartes doivent avoir la même valeur
+    const valPiochee = cartePiochee ? cartePiochee.split('_')[0] : null;
+    const valPaire = cartePaire ? cartePaire.split('_')[0] : null;
+    if (!valPiochee || !valPaire || valPiochee !== valPaire) {
+      // Mauvaise paire — ajouter la carte piochée dans le jeu du joueur
+      const slotVide = joueurSalon.slots.indexOf(null);
+      if (slotVide >= 0) {
+        joueurSalon.slots[slotVide] = cartePiochee;
+      } else {
+        joueurSalon.slots.push(cartePiochee);
+      }
+      socket.emit('carte_ajoutee', { slots: joueurSalon.slots });
+      socket.to(j.salonCode).emit('adversaire_carte_ajoutee', {
+        joueurId: socket.id,
+        nbSlots: joueurSalon.slots.filter(c => c !== null).length,
+      });
+      console.log(`[s_supprimer_paire] Mauvaise paire: piochée=${cartePiochee}, slot=${cartePaire}`);
+      return; // Ne pas passer le tour
+    }
+
     joueurSalon.slots[slotIndex] = null;
     joueurSalon.slotsVus.delete(slotIndex);
     p.defausse.push(cartePiochee);
@@ -668,6 +691,7 @@ io.on('connection', (socket) => {
       joueurId: socket.id,
       slotIndex,
       cartePaire,
+      defausseTop: p.defausse[p.defausse.length - 1],
     });
 
     if (p.dernierTour) {
