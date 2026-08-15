@@ -329,7 +329,8 @@ function nouvelleManche(salonCode) {
       j.slotsVus = new Set([2, 3]);
     }
   }
-  p.defausse.push(p.deck.pop());
+  // Défausse vide au début de chaque manche
+  // (pas de carte initiale — le premier joueur commence à piocher)
 
   // Trouver le joueur qui a le plus de points pour commencer
   const joueurMax = salon.joueurs
@@ -349,7 +350,7 @@ function nouvelleManche(salonCode) {
       nbCartesPioche: p.deck.length,
       tourDe: salon.joueurs[p.tourIdx].id,
       mancheNum: p.mancheNum,
-      scores: Object.fromEntries(salon.joueurs.map(jj => [jj.id, { pseudo: jj.pseudo, score: jj.score, eliminee: jj.eliminee }])),
+      scores: Object.fromEntries(salon.joueurs.map(jj => [jj.id, { pseudo: jj.pseudo, avatar: jj.avatar||'chien', score: jj.score, eliminee: jj.eliminee }])),
     });
   }
 }
@@ -843,6 +844,19 @@ io.on('connection', (socket) => {
 
   socket.on('ping_keepalive', () => {
     socket.emit('pong_keepalive');
+  });
+
+  // ── PRÉSENCE : vérifier quels amis sont en ligne ─────────────────────
+  socket.on('s_verifier_presence', ({ codesAmis }) => {
+    if (!Array.isArray(codesAmis)) return;
+    const enLigne = codesAmis.filter(code => {
+      const info = codeAmiIndex[code];
+      if (!info) return false;
+      // Vérifier que le socket est toujours connecté
+      const sock = io.sockets.sockets.get(info.socketId);
+      return !!sock;
+    });
+    socket.emit('presence_amis', { enLigne });
   });
 
   // ── POUVOIR 9 : regarder sa propre carte ──────────────────────────────
