@@ -1000,6 +1000,8 @@ io.on('connection', (socket) => {
           raison: 'abandon',
         });
         salon.etat = 'terminee';
+        // Supprimer le salon après un délai pour laisser le message arriver
+        setTimeout(() => { delete salons[j.salonCode]; }, 3000);
       }
     }
     delete j.salonCode;
