@@ -175,8 +175,7 @@ function demarrerPartie(salonCode) {
     j.slotsVus = new Set([2, 3]); // connaît les 2 cartes du bas
   }
 
-  // Carte initiale en défausse
-  salon.partie.defausse.push(salon.partie.deck.pop());
+  // Pas de carte initiale en défausse — commence vide
 
   // Envoyer l'état initial à chaque joueur
   for (const j of salon.joueurs) {
@@ -437,7 +436,7 @@ io.on('connection', (socket) => {
   });
 
   // ── REJOINDRE UN SALON ────────────────────────────────────
-  socket.on('s_rejoindre_salon', async ({ code, pseudo }) => {
+  socket.on('s_rejoindre_salon', async ({ code, pseudo, avatar }) => {
     const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const salon = salons[code];
@@ -450,7 +449,10 @@ io.on('connection', (socket) => {
     joueur.salonCode = code;
     joueurs[socket.id] = joueur;
 
-    const avatarInvite = (joueurs[socket.id] && joueurs[socket.id].avatar) || 'chien';
+    // Priorité : avatar reçu dans s_rejoindre_salon, sinon depuis s_inscrire
+    const avatarInvite = avatar || (joueurs[socket.id] && joueurs[socket.id].avatar) || 'chien';
+    // Mettre à jour joueurs avec cet avatar
+    if(joueurs[socket.id]) joueurs[socket.id].avatar = avatarInvite;
     const codeAmiInvite = (joueurs[socket.id] && joueurs[socket.id].codeAmi) || '';
     salon.joueurs.push({ id: socket.id, codeAmi: codeAmiInvite, pseudo: res.pseudoFinal, avatar: avatarInvite, pret: false, score: 0, slots: [], slotsVus: new Set() });
     socket.join(code);
@@ -606,6 +608,7 @@ io.on('connection', (socket) => {
 
     if (salon.joueurs[p.tourIdx].id !== socket.id) return;
 
+    console.log(`[s_defausser] ${j.pseudo}: défausse ${cartePiochee}`);
     p.defausse.push(cartePiochee);
     const nouveauTop = p.defausse[p.defausse.length - 1];
     io.to(j.salonCode).emit('carte_defaussee', {
@@ -704,9 +707,10 @@ io.on('connection', (socket) => {
   // ── DÉCLARER KOBO ────────────────────────────────────────
   socket.on('s_kobo', () => {
     const j = joueurs[socket.id];
-    if (!j || !j.salonCode) return;
+    console.log(`[s_kobo] reçu de ${j?.pseudo}, salon=${j?.salonCode}`);
+    if (!j || !j.salonCode) { console.log('[s_kobo] pas de salon!'); return; }
     const salon = salons[j.salonCode];
-    if (!salon || !salon.partie) return;
+    if (!salon || !salon.partie) { console.log('[s_kobo] pas de partie!'); return; }
     const p = salon.partie;
 
     if (salon.joueurs[p.tourIdx].id !== socket.id) {
