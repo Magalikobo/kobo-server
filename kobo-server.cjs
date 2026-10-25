@@ -284,12 +284,25 @@ function finManche(salonCode) {
   const revelation = {};
   for (const j of salon.joueurs) revelation[j.id] = j.slots;
 
+  // Calculer le résultat du Kobo pour l'afficher côté client
+  let koboResultat = null;
+  if (p.koboDeclarant) {
+    const ptsDeclarant = pointsParJoueur[p.koboDeclarant];
+    const minAutres = Math.min(...Object.entries(pointsParJoueur)
+      .filter(([id]) => id !== p.koboDeclarant)
+      .map(([, pts]) => pts));
+    if (ptsDeclarant < minAutres) koboResultat = 'reussi';
+    else if (ptsDeclarant === minAutres) koboResultat = 'egalite';
+    else koboResultat = 'rate';
+  }
+
   io.to(salonCode).emit('fin_manche', {
     scores,
     pointsCetteManche: pointsParJoueur,
     scoresTotal: Object.fromEntries(salon.joueurs.map(j => [j.id, j.score])),
     revelation,
     koboDeclarant: p.koboDeclarant,
+    koboResultat,
     mancheNum: p.mancheNum,
   });
 
@@ -389,14 +402,14 @@ io.on('connection', (socket) => {
   // Recherche d'un joueur par son code ami
   socket.on('s_chercher_ami', ({ codeAmi }) => {
     const info = codeAmiIndex[codeAmi];
-    if (!info) {
+    if (!info) { socket.emit('ami_introuvable', { codeAmi }); return; }
+    // Vérifier que le socket de l'ami est toujours actif
+    const sockAmi = io.sockets.sockets.get(info.socketId);
+    if (!sockAmi) {
+      delete codeAmiIndex[codeAmi]; // nettoyer l'entrée périmée
       socket.emit('ami_introuvable', { codeAmi }); return;
     }
-    socket.emit('ami_trouve', {
-      codeAmi,
-      pseudo: info.pseudo,
-      avatar: info.avatar,
-    });
+    socket.emit('ami_trouve', { codeAmi, pseudo: info.pseudo, avatar: info.avatar });
   });
 
   // ── CRÉER UN SALON ────────────────────────────────────────
