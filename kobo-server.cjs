@@ -647,17 +647,21 @@ io.on('connection', (socket) => {
     if (!jSlots) return;
     // Ajouter la carte dans un slot vide ou en 5ème position
     const slotVide = jSlots.slots.indexOf(null);
+    let idxAjout2;
     if(slotVide >= 0){
       jSlots.slots[slotVide] = carte;
+      idxAjout2 = slotVide;
     } else {
       jSlots.slots.push(carte);
+      idxAjout2 = jSlots.slots.length - 1;
     }
     socket.emit('carte_ajoutee', { slots: jSlots.slots });
     // Ne pas passer le tour — le joueur doit encore jouer (remplacer/défausser)
     // Informer aussi les adversaires qu'une carte a été ajoutée
     socket.to(j.salonCode).emit('adversaire_carte_ajoutee', {
       joueurId: socket.id,
-      nbSlots: jSlots.slots.filter(c => c !== null).length,
+      slotIndex: idxAjout2,
+      nbSlots: jSlots.slots.length,
     });
   });
 
@@ -679,18 +683,25 @@ io.on('connection', (socket) => {
     if (!valPiochee || !valPaire || valPiochee !== valPaire) {
       // Mauvaise paire — ajouter la carte piochée dans le jeu du joueur
       const slotVide = joueurSalon.slots.indexOf(null);
+      let idxAjout;
       if (slotVide >= 0) {
         joueurSalon.slots[slotVide] = cartePiochee;
+        idxAjout = slotVide;
       } else {
         joueurSalon.slots.push(cartePiochee);
+        idxAjout = joueurSalon.slots.length - 1;
       }
       socket.emit('carte_ajoutee', { slots: joueurSalon.slots });
       socket.to(j.salonCode).emit('adversaire_carte_ajoutee', {
         joueurId: socket.id,
-        nbSlots: joueurSalon.slots.filter(c => c !== null).length,
+        slotIndex: idxAjout,
+        nbSlots: joueurSalon.slots.length,
       });
       console.log(`[s_supprimer_paire] Mauvaise paire: piochée=${cartePiochee}, slot=${cartePaire}`);
-      return; // Ne pas passer le tour
+      // Comme en solo : la carte est intégrée au jeu et le tour passe
+      if (p.dernierTour) { p.dernierTourJoue.add(socket.id); }
+      prochainTour(j.salonCode);
+      return;
     }
 
     joueurSalon.slots[slotIndex] = null;
@@ -978,7 +989,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     // Nettoyer l'index codeAmi
     const j = joueurs[socket.id];
-    if (j && j.codeAmi && codeAmiIndex[j.codeAmi]) delete codeAmiIndex[j.codeAmi];
+    if (j && j.codeAmi && codeAmiIndex[j.codeAmi] && codeAmiIndex[j.codeAmi].socketId === socket.id) delete codeAmiIndex[j.codeAmi];
     quitterSalon(socket);
     delete joueurs[socket.id];
     console.log(`[-] Déconnexion : ${socket.id}`);
