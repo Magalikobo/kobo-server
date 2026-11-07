@@ -41,6 +41,7 @@ function sha256(str) {
 }
 
 // Fonction marquée async pour permettre l'utilisation de await
+const cachePseudos = new Map();   // pseudo -> { ok, exp } : évite d'interroger le filtre externe à chaque connexion
 async function validerPseudoServeur(saisie) {
   saisie = (saisie || '').trim();
   const parties    = saisie.split('#');
@@ -52,18 +53,26 @@ async function validerPseudoServeur(saisie) {
   if (!/^[a-zA-Z0-9_\-àâéèêëîïôùûüç]+$/.test(pseudoBrut))
     return { ok: false, erreur: 'Caractères non autorisés.' };
 
-  // Vérification via l'API externe (sans aucune bibliothèque à installer)
-  try {
-    const response = await fetch(`https://www.purgomalum.com/service/json?text=${encodeURIComponent(pseudoBrut)}`);
-    const data = await response.json();
-
-    if (data.result !== pseudoBrut) {
-        return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
+  // Vérification via l'API externe : durée limitée (1,5 s) et résultat mis en cache, pour ne jamais
+  // bloquer l'inscription, la création ou l'arrivée dans un salon quand ce site est lent
+  const cleCache = pseudoBrut.toLowerCase();
+  const enCache = cachePseudos.get(cleCache);
+  let autorise;
+  if (enCache && enCache.exp > Date.now()) {
+    autorise = enCache.ok;
+  } else {
+    try {
+      const response = await fetch(`https://www.purgomalum.com/service/json?text=${encodeURIComponent(pseudoBrut)}`, { signal: AbortSignal.timeout(1500) });
+      const data = await response.json();
+      autorise = (data.result === pseudoBrut);
+      cachePseudos.set(cleCache, { ok: autorise, exp: Date.now() + 24 * 3600 * 1000 });
+    } catch (err) {
+      console.error("Erreur filtre :", err && err.name ? err.name : err);
+      autorise = true;   // injoignable ou trop lent : on laisse passer (comportement d'origine), pour 60 s seulement
+      cachePseudos.set(cleCache, { ok: true, exp: Date.now() + 60 * 1000 });
     }
-  } catch (err) {
-    console.error("Erreur filtre :", err);
-    // On continue par sécurité si l'API est injoignable
   }
+  if (!autorise) return { ok: false, erreur: 'Ce pseudo n\'est pas autorisé.' };
 
   const pseudoNorm = normaliserPseudo(pseudoBrut);
   const estReserve = PSEUDOS_RESERVES.some(r => normaliserPseudo(r) === pseudoNorm);
@@ -88,6 +97,9 @@ const joueurs = {};
 
 // Index codeAmi → socketId (pour invitations et présence)
 const codeAmiIndex = {};
+const creationsEnCours = new Set();   // sockets dont la création de salon est en cours (anti-doublon)
+// Un code ami est comparé sans tenir compte des majuscules ni des espaces
+function normaliserCodeAmi(c) { return String(c || '').trim().toUpperCase(); }
 
 // ═══════════════════════════════════════════════════════════
 // HELPERS
@@ -209,6 +221,7 @@ function prochainTour(salonCode) {
   const salon = salons[salonCode];
   if (!salon || !salon.partie) return;
   const p = salon.partie;
+  const idPrecedent = salon.joueurs[p.tourIdx].id;   // le joueur dont le tour se termine
 
   // Passer au joueur suivant (actif)
   let next = (p.tourIdx + 1) % salon.joueurs.length;
@@ -230,10 +243,13 @@ function prochainTour(salonCode) {
     }
   }
 
+  // Le joueur dont le tour vient de finir peut encore déclarer Kobo tant que le suivant n'a pas pioché
+  p.koboFenetre = p.dernierTour ? null : idPrecedent;
   io.to(salonCode).emit('tour_change', {
     tourDe: salon.joueurs[p.tourIdx].id,
     defausseTop: p.defausse[p.defausse.length - 1] || null,
     nbCartesPioche: p.deck.length,
+    scores: Object.fromEntries(salon.joueurs.map(jj => [jj.id, jj.score || 0])),
   });
 }
 
@@ -294,6 +310,7 @@ function finManche(salonCode) {
     if (ptsDeclarant < minAutres) koboResultat = 'reussi';
     else if (ptsDeclarant === minAutres) koboResultat = 'egalite';
     else koboResultat = 'rate';
+    if (p.koboAuto && koboResultat !== 'rate') koboResultat = 'auto';
   }
 
   io.to(salonCode).emit('fin_manche', {
@@ -331,6 +348,8 @@ function nouvelleManche(salonCode) {
   p.defausse = [];
   p.mancheNum++;
   p.koboDeclarant = null;
+  p.koboAuto = false;
+  p.koboFenetre = null;
   p.dernierTour = false;
   p.dernierTourJoue = new Set();
 
@@ -376,6 +395,7 @@ io.on('connection', (socket) => {
 
   // ── INSCRIPTION ──────────────────────────────────────────
   socket.on('s_inscrire', async ({ pseudo, codeAmi, avatar }) => {
+    codeAmi = normaliserCodeAmi(codeAmi);
     const res = await validerPseudoServeur(pseudo);
     if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
     const av = avatar || 'chien';
@@ -401,6 +421,7 @@ io.on('connection', (socket) => {
 
   // Recherche d'un joueur par son code ami
   socket.on('s_chercher_ami', ({ codeAmi }) => {
+    codeAmi = normaliserCodeAmi(codeAmi);
     const info = codeAmiIndex[codeAmi];
     if (!info) { socket.emit('ami_introuvable', { codeAmi }); return; }
     // Vérifier que le socket de l'ami est toujours actif
@@ -414,8 +435,15 @@ io.on('connection', (socket) => {
 
   // ── CRÉER UN SALON ────────────────────────────────────────
   socket.on('s_creer_salon', async ({ pseudo, maxJoueurs = 4, avatar }) => {
+    // Idempotent : si ce joueur a déjà un salon en attente, on le renvoie (pas de doublon avec un nouveau code)
+    const jDeja = joueurs[socket.id];
+    if (jDeja && jDeja.salonCode && salons[jDeja.salonCode] && salons[jDeja.salonCode].hote === socket.id && salons[jDeja.salonCode].etat === 'attente') {
+      socket.emit('salon_cree', { code: jDeja.salonCode, salon: getSalonPublic(jDeja.salonCode) }); return;
+    }
+    if (creationsEnCours.has(socket.id)) return;   // une création est déjà en cours pour ce joueur
+    creationsEnCours.add(socket.id);
     const res = await validerPseudoServeur(pseudo);
-    if (!res.ok) { socket.emit('erreur', { msg: res.erreur }); return; }
+    if (!res.ok) { creationsEnCours.delete(socket.id); socket.emit('erreur', { msg: res.erreur }); return; }
     const code = genererCode(6);
     const joueur = joueurs[socket.id] || { id: socket.id, pseudo: res.pseudoFinal };
     joueur.pseudo = res.pseudoFinal;
@@ -445,6 +473,7 @@ io.on('connection', (socket) => {
     joueur.salonCode = code;
     socket.join(code);
     socket.emit('salon_cree', { code, salon: getSalonPublic(code) });
+    creationsEnCours.delete(socket.id);
     console.log(`[salon] Créé : ${code} par ${pseudo}`);
   });
 
@@ -533,6 +562,7 @@ io.on('connection', (socket) => {
     }
 
     const carte = p.deck.pop();
+    p.koboFenetre = null;   // le joueur suivant a commencé : la fenêtre de Kobo de fin de tour est fermée
     socket.emit('carte_piochee', {
       carte,
       nbCartesPioche: p.deck.length,
@@ -562,6 +592,7 @@ io.on('connection', (socket) => {
     const carte = p.defausse.pop();
     const defausseRestante = p.defausse[p.defausse.length - 1] || null;
     // Envoyer au joueur qui pioche
+    p.koboFenetre = null;
     socket.emit('carte_defausse_piochee', {
       carte,
       defausseRestante,
@@ -722,6 +753,13 @@ io.on('connection', (socket) => {
       defausseTop: p.defausse[p.defausse.length - 1],
     });
 
+    // Plus aucune carte : Kobo automatique (comme en solo)
+    if (!p.dernierTour && joueurSalon.slots.every(cc => cc === null)) {
+      p.koboDeclarant = socket.id;
+      p.dernierTour = true;
+      p.koboAuto = true;
+      io.to(j.salonCode).emit('kobo_declare', { joueurId: socket.id, pseudo: j.pseudo, auto: true });
+    }
     if (p.dernierTour) {
       p.dernierTourJoue.add(socket.id);
     }
@@ -737,8 +775,11 @@ io.on('connection', (socket) => {
     if (!salon || !salon.partie) { console.log('[s_kobo] pas de partie!'); return; }
     const p = salon.partie;
 
-    if (salon.joueurs[p.tourIdx].id !== socket.id) {
-      socket.emit('erreur', { msg: "Vous pouvez déclarer Kobo seulement pendant votre tour." }); return;
+    // Kobo déclarable au DÉBUT de son tour, ou à la FIN de son tour (tant que le joueur suivant n'a pas pioché)
+    const monTour = salon.joueurs[p.tourIdx].id === socket.id;
+    const finDeTour = p.koboFenetre === socket.id;
+    if (!monTour && !finDeTour) {
+      socket.emit('erreur', { msg: "Vous pouvez déclarer Kobo au début ou à la fin de votre tour." }); return;
     }
     if (p.dernierTour) {
       socket.emit('erreur', { msg: 'Kobo déjà déclaré.' }); return;
@@ -747,14 +788,16 @@ io.on('connection', (socket) => {
     p.koboDeclarant = socket.id;
     p.dernierTour = true;
     p.dernierTourJoue.add(socket.id); // Le déclarant n'a plus de tour
+    p.koboFenetre = null;
 
     io.to(j.salonCode).emit('kobo_declare', {
       joueurId: socket.id,
       pseudo: j.pseudo,
     });
 
-    // Passer au joueur suivant pour le dernier tour
-    prochainTour(j.salonCode);
+    // Début de tour : on passe la main. Fin de tour : la main est déjà passée au joueur suivant,
+    // qui joue son dernier tour.
+    if (monTour) prochainTour(j.salonCode);
   });
 
   // ── POUVOIR 9 (regarder sa propre carte) ─────────────────
@@ -842,28 +885,31 @@ io.on('connection', (socket) => {
 
   // ── QUITTER ───────────────────────────────────────────────
   // ── INVITATION PAR CODE AMI ─────────────────────────────
-  socket.on('s_inviter', ({ codeAmiCible, salonCode }) => {
+  socket.on('s_inviter', ({ codeAmiCible, salonCode, pseudoCible }) => {
     const expediteur = joueurs[socket.id];
-    if (!expediteur) return;
-    // Trouver le socket de la cible par son code ami
-    const cibleInfo = codeAmiIndex[codeAmiCible];
-    console.log(`[invitation] codeAmiCible=${codeAmiCible}, cibleInfo=`, cibleInfo);
-    console.log(`[invitation] codeAmiIndex keys=`, Object.keys(codeAmiIndex));
-    const cibleSocketId = cibleInfo ? cibleInfo.socketId : null;
-    if (!cibleSocketId) {
-      socket.emit('erreur', { msg: 'Ami introuvable ou hors ligne. Demandez-lui de rouvrir la page multi.' }); return;
+    if (!expediteur) { socket.emit('erreur', { msg: 'Connexion en cours, réessayez dans un instant.' }); return; }
+    const code = normaliserCodeAmi(codeAmiCible);
+    let socketCible = null, codeReel = null;
+    // 1) l'ami est retrouvé par son code ami
+    const cibleInfo = codeAmiIndex[code];
+    if (cibleInfo) socketCible = io.sockets.sockets.get(cibleInfo.socketId) || null;
+    // 2) sinon (code périmé, absent ou ancienne version de l'app) : par son pseudo, s'il n'y a qu'un seul candidat
+    if (!socketCible && pseudoCible) {
+      const p = String(pseudoCible).trim().toLowerCase();
+      const candidats = Object.values(joueurs).filter(jj => jj.id !== socket.id && jj.pseudo && jj.pseudo.toLowerCase() === p && io.sockets.sockets.get(jj.id));
+      if (candidats.length === 1) { socketCible = io.sockets.sockets.get(candidats[0].id); codeReel = candidats[0].codeAmi || null; }
     }
-    const socketCible = io.sockets.sockets.get(cibleSocketId);
     if (!socketCible) {
-      socket.emit('erreur', { msg: 'Ami déconnecté. Demandez-lui de rouvrir la page multi.' }); return;
+      const msg = `Aucun joueur connecté avec le code ${code || '(vide)'}${pseudoCible ? ' (' + pseudoCible + ')' : ''}. Vérifiez que votre ami est sur la page multi et que son code ami est bien celui-ci.`;
+      socket.emit('erreur', { msg });
+      socket.emit('invitation_echec', { codeAmiCible: code, pseudoCible: pseudoCible || null });
+      console.log(`[invitation] ÉCHEC ${expediteur.pseudo} → ${code} (${pseudoCible || '?'})`);
+      return;
     }
-    socketCible.emit('invitation_recue', {
-      de: expediteur.pseudo,
-      codeAmi: expediteur.codeAmi,
-      salonCode,
-    });
-    socket.emit('invitation_envoyee', { codeAmiCible });
-    console.log(`[invitation] ${expediteur.pseudo} → ${codeAmiCible} (salon ${salonCode})`);
+    socketCible.emit('invitation_recue', { de: expediteur.pseudo, codeAmi: expediteur.codeAmi, salonCode });
+    socket.emit('invitation_envoyee', { codeAmiCible: code });
+    if (codeReel && codeReel !== code) socket.emit('invitation_corrigee', { codeAmiCible: code, codeAmiReel: codeReel, pseudo: pseudoCible });
+    console.log(`[invitation] ${expediteur.pseudo} → ${code} (salon ${salonCode})${codeReel && codeReel !== code ? ' [retrouvé par pseudo]' : ''}`);
   });
 
   socket.on('s_quitter_salon', () => {
@@ -878,7 +924,7 @@ io.on('connection', (socket) => {
   socket.on('s_verifier_presence', ({ codesAmis }) => {
     if (!Array.isArray(codesAmis)) return;
     const enLigne = codesAmis.filter(code => {
-      const info = codeAmiIndex[code];
+      const info = codeAmiIndex[normaliserCodeAmi(code)];
       if (!info) return false;
       // Vérifier que le socket est toujours connecté
       const sock = io.sockets.sockets.get(info.socketId);
@@ -992,6 +1038,7 @@ io.on('connection', (socket) => {
     if (j && j.codeAmi && codeAmiIndex[j.codeAmi] && codeAmiIndex[j.codeAmi].socketId === socket.id) delete codeAmiIndex[j.codeAmi];
     quitterSalon(socket);
     delete joueurs[socket.id];
+    creationsEnCours.delete(socket.id);
     console.log(`[-] Déconnexion : ${socket.id}`);
   });
 
