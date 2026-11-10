@@ -848,8 +848,12 @@ io.on('connection', (socket) => {
 
     // Échanger les cartes
     const maCarte = moi.slots[monSlot];
+    if (maCarte === null || maCarte === undefined) return;          // rien à échanger
     const carteCible = cible.slots[slotCible];
-    moi.slots[monSlot] = carteCible;   // Reçue face CACHÉE (on ne la connaît pas)
+    // Case vide : « échange contre rien » = on DONNE sa carte, mais seulement à un joueur qui n'a plus aucune carte
+    const don = (carteCible === null || carteCible === undefined);
+    if (don && !cible.slots.every(cc => cc === null || cc === undefined)) return;
+    moi.slots[monSlot] = don ? null : carteCible;   // Reçue face CACHÉE (on ne la connaît pas)
     cible.slots[slotCible] = maCarte;
 
     // Mettre à jour la mémoire
@@ -861,6 +865,7 @@ io.on('connection', (socket) => {
       monSlot,
       cibleId,
       slotCible,
+      don,   // true : la carte a été donnée à un joueur sans cartes (rien reçu en échange)
       // On ne révèle pas les cartes échangées
     });
     // Informer la cible que sa carte a changé (face cachée)
