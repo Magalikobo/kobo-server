@@ -750,6 +750,7 @@ io.on('connection', (socket) => {
       joueurId: socket.id,
       slotIndex,
       cartePaire,
+      cartePiochee,   // la carte piochée (même valeur) rejoint elle aussi la défausse
       defausseTop: p.defausse[p.defausse.length - 1],
     });
 
